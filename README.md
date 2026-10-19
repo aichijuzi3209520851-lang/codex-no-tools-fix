@@ -2,6 +2,9 @@
 
 修复 Codex Desktop「模型说自己没有文件/终端工具」的问题。
 
+> 症状：模型能看到项目、权限也是 `Full access`，但它回答
+> "当前会话没有可用的文件读取工具 / 没有终端入口"，一个工具都调不动。
+
 ## 怎么用
 
 双击 **`双击运行-修复Codex工具.bat`**，看完输出后按任意键关闭。
@@ -13,6 +16,18 @@
 ```
 双击运行-修复Codex工具.bat --deep
 ```
+
+只看不改、先确认它会动哪些文件：
+
+```
+双击运行-修复Codex工具.bat --dry-run
+```
+
+### 前置要求
+
+- Windows 10 / 11
+- Python 3.11 或更高（安装时记得勾选 "Add Python to PATH"）
+  - 启动器会依次尝试 `py -3.11`、`python`、常见安装路径，找不到会给出提示
 
 ## 它修了什么
 
@@ -36,6 +51,30 @@ Codex 0.163 给新一代模型（gpt-6-sol / gpt-6.1-sol / gpt-5.6 系列等）�
 `notify`、`[mcp_servers.node_repl]`、插件缓存里的 `.mcp.json`、`chrome-native-hosts-v2.json`，
 以及 CC-Switch 数据库里那段会被拼回 `config.toml` 的公共配置片段。
 还会删掉新版 Codex 已不认识的 `network_access` 键（它会刷启动告警）。
+
+> 注意：模型目录是 **app-server 启动时**装配并缓存的，改完必须重启 Codex Desktop。
+> 只重开窗口不够，要整个退出（含托盘图标）。
+
+## 手动修复（不想跑脚本）
+
+1. 用空目录作为 `CODEX_HOME` 导出内置模型目录：
+
+   ```bat
+   set CODEX_HOME=%TEMP%\codex-empty
+   codex debug models > %USERPROFILE%\.codex\catalog-raw.json
+   ```
+
+2. 编辑 `catalog-raw.json` 里 `models` 的每一条：把 `use_responses_lite` 改成 `false`，
+   并删除 `tool_mode` 字段，另存为 `%USERPROFILE%\.codex\codex-catalog-classic.json`。
+
+3. 在 `%USERPROFILE%\.codex\config.toml` 的第一张 `[table]` **之前**加一行
+   （单引号、正斜杠，写反斜杠会被当转义）：
+
+   ```toml
+   model_catalog_json = 'C:/Users/<你的用户名>/.codex/codex-catalog-classic.json'
+   ```
+
+4. 完全退出并重新打开 Codex Desktop。
 
 ## 安全性
 
@@ -72,3 +111,9 @@ Codex 0.163 给新一代模型（gpt-6-sol / gpt-6.1-sol / gpt-5.6 系列等）�
 - `AuthRequired ... mcp.canva.com ...` / figma OAuth 失败 —— 远端 MCP 需要登录
 - `app_server_connection.reconnect_failed "Sign in to ChatGPT to start a durable thread."`
   —— 桌面端连云端的 durable host 需要登录 ChatGPT 账号，本地 app-server 不受影响
+
+## 验证环境
+
+- Windows 11 + Codex Desktop 0.163.0-alpha.10.2（codex-cli）
+- 第三方 OpenAI 兼容中转（CC-Switch 转发）
+- 已验证：修复后模型能真实调用 `exec_command` 执行命令并回读文件内容
