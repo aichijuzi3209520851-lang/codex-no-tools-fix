@@ -1,0 +1,14 @@
+# 运行产物（每次修复都会生成带时间戳的报告，不需要进仓库）
+last-fix-report-*.txt
+
+# 测试时造的临时环境
+_tab/
+_neg/
+_empty/
+
+# Python
+__pycache__/
+*.pyc
+
+# 备份文件
+*.bak-*
