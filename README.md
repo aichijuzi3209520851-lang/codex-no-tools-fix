@@ -90,11 +90,42 @@ Codex 0.163 给新一代模型（gpt-6-sol / gpt-6.1-sol / gpt-5.6 系列等）�
 | --- | --- |
 | `双击运行-修复Codex工具.bat` | 启动器（纯 ASCII，避免 cmd 编码问题） |
 | `fix_codex_tools.py` | 主逻辑：四步修复 + 验证 |
+| `assets/codex-tool-fix.ico` | 多尺寸图标（16/20/24/32/40/48/64/96/128/256） |
+| `assets/codex-tool-fix.png` | 1024px 预览图 |
+| `_make_icon.py` | 重新生成图标 |
+| `_check_icon.py` | 图标量化验收（居中 / 体量一致 / 对比度 / 小尺寸不糊） |
+| `_make_shortcut.py` | 创建桌面快捷方式并做像素级图标校验 |
+| `_verify_shortcut_e2e.py` | 端到端验证：快捷方式 → bat → 修复脚本 |
 | `_make_bat.py` | 重新生成启动器（改了中文提示后跑一下） |
 | `_make_broken_fixture.py` | 造一个"坏掉"的测试环境，用于回归测试 |
 | `_test_deep_negative.py` | 负向测试：确认坏环境下 `--deep` 会判失败而不是假阳性 |
 
 每次运行会在同目录生成 `last-fix-report-<时间戳>.txt`，记录了所有操作，可以删。
+
+## 桌面快捷方式与图标
+
+`.bat` 文件在资源管理器里只能显示系统默认图标，这是 Windows 的固定行为，改不了。
+想让它在桌面上是自定义图标，只能建一个 `.lnk` 快捷方式、把 `IconLocation`
+指向 `assets/codex-tool-fix.ico`。
+
+```
+python _make_shortcut.py
+```
+
+它会在**真实桌面**（自动识别被重定向的桌面路径，例如 `D:\桌面文件`）创建
+`Codex 工具修复.lnk`，然后做四步验收：
+
+1. 回读 `.lnk` 的目标 / 起始位置 / 图标路径
+2. `SHGetFileInfoW` 取 Windows **实际分配**给该快捷方式的 `HICON`
+3. `GetIconInfo` + `GetDIBits` 取图标像素，与 `.ico` 里同尺寸那一帧逐像素比对
+   —— 只有这一步能证明系统真的用了我们的图标，而不是静默回退到默认图标
+4. 断链检查
+
+图标设计见 `_make_icon.py` 顶部注释：一枚 squircle 底片 + 加粗的命令行提示符 `❯`
++ 渐变光标块，避开被用滥的齿轮/扳手套话图形。16–32px 用一套单独加粗的参数重绘
+（不是把 1024 直接缩小），并由 `_check_icon.py` 量化验收：光学质心居中、
+各尺寸实心面积极差 ≤ 8 个百分点、字形/底对比度 ≥ 4.5:1、小尺寸下 V 形与光标块
+之间仍留有背景间隙。
 
 ## 什么情况下需要重跑
 
