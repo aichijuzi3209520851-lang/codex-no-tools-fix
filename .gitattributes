@@ -1,0 +1,14 @@
+# 统一换行策略：默认按文本处理，仓库内与检出都用 LF
+* text=auto eol=lf
+
+# .bat 用 -text 彻底关掉换行转换：
+# 让仓库里存的字节和用户下载到的字节完全一致（CRLF）。
+# cmd.exe 对 LF 换行的 .bat 解析不稳定（多行 if (...) 块、goto 标签尤其容易出错），
+# 用 `text eol=crlf` 只能保证 git clone 后是 CRLF，
+# 而 raw.githubusercontent.com 直接下载拿到的仍是 LF —— 这里要的是"原始字节就是 CRLF"。
+*.bat -text
+*.cmd -text
+
+# 二进制
+*.zip binary
+*.exe binary
