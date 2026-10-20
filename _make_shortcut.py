@@ -10,14 +10,22 @@
 指向我们的 .ico。
 
 本脚本做的事：
-  1. 找到真实桌面目录（不一定是 %USERPROFILE%\\Desktop，桌面可能被重定向）
-  2. 在桌面创建/覆盖 "Codex 工具修复.lnk"
-  3. 三步验收：
+  1. 把图标安装到 %LOCALAPPDATA%\\CodexToolFix\\ （不放在脚本目录）
+  2. 找到真实桌面目录（不一定是 %USERPROFILE%\\Desktop，桌面可能被重定向）
+  3. 在桌面创建/覆盖 "Codex 工具修复.lnk"，IconLocation 指向安装后的图标
+  4. 四步验收：
      a. 回读 .lnk 属性，确认目标 / 起始位置 / 图标路径写对了
      b. SHGetFileInfoW 拿到 Windows 真正分配给这个 .lnk 的 HICON，
         再用 GetIconInfo + GetDIBits 取像素，与 .ico 里同尺寸那一帧逐像素比对
         —— 这一步才能证明"系统真的用了我们的图标"，而不是静默回退到默认
      c. 确认目标 .bat 存在，快捷方式不是断链
+
+为什么图标要单独安装到 %LOCALAPPDATA%：
+  如果脚本目录位于带「低完整性标签(Low Mandatory Level)」的目录树里
+  （很多沙箱、容器、受限工作区会这么做），那么在该目录里生成的文件都会
+  继承这个标签。文件本身仍然可读、.ico 结构也完全正确，但 Windows shell
+  的图标提取管道遇到 Low 标签文件会失败，于是快捷方式静默回退成通用的
+  「白纸」图标。安装到 %LOCALAPPDATA% 可以拿到干净标签，避开这个坑。
 
 复现：python _make_shortcut.py
 ===============================================================================
@@ -27,6 +35,7 @@ import ctypes
 import ctypes.wintypes as wt
 import json
 import os
+import shutil
 import subprocess
 import sys
 
@@ -35,9 +44,17 @@ from PIL import Image
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 BAT_NAME = "双击运行-修复Codex工具.bat"
-ICO = os.path.join(HERE, "assets", "codex-tool-fix.ico")
+ICO_SRC = os.path.join(HERE, "assets", "codex-tool-fix.ico")
 LNK_NAME = "Codex 工具修复.lnk"
 DESC = "一键修复 Codex Desktop 模型拿不到文件/终端工具的问题"
+
+# 图标安装位置。绝不能放在脚本目录里——见文件头的说明：
+# 若脚本目录带低完整性标签，图标会被 shell 的图标提取管道拒绝，快捷方式退成白纸。
+ICON_DIR = os.path.join(
+    os.environ.get("LOCALAPPDATA") or os.path.join(os.path.expanduser("~"), "AppData", "Local"),
+    "CodexToolFix",
+)
+ICO = os.path.join(ICON_DIR, "codex-tool-fix.ico")
 
 
 # ----------------------------------------------------------------------------
@@ -293,6 +310,73 @@ def compare(shell_img, want_img):
     return float(diff), ""
 
 
+# ----------------------------------------------------------------------------
+# 完整性标签（Low Mandatory Level 会让 shell 图标提取失败，必须检查）
+# ----------------------------------------------------------------------------
+
+LABEL_SECURITY_INFORMATION = 0x00000010
+SYSTEM_MANDATORY_LABEL_ACE_TYPE = 0x11
+SE_FILE_OBJECT = 1
+INTEGRITY_NAMES = {
+    0x0000: "Untrusted",
+    0x1000: "Low",
+    0x2000: "Medium",
+    0x2100: "Medium-Plus",
+    0x3000: "High",
+    0x4000: "System",
+}
+
+
+def integrity_rid(path):
+    """返回文件对象完整性标签的 RID（0x1000=Low …）；无标签返回 None。"""
+    adv = ctypes.windll.advapi32
+    adv.GetNamedSecurityInfoW.argtypes = [
+        wt.LPWSTR, ctypes.c_int, wt.DWORD,
+        ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(ctypes.c_void_p),
+        ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(ctypes.c_void_p),
+        ctypes.POINTER(ctypes.c_void_p)]
+    adv.GetNamedSecurityInfoW.restype = wt.DWORD
+
+    psd = ctypes.c_void_p()
+    psacl = ctypes.c_void_p()
+    rc = adv.GetNamedSecurityInfoW(path, SE_FILE_OBJECT, LABEL_SECURITY_INFORMATION,
+                                   None, None, None, ctypes.byref(psacl),
+                                   ctypes.byref(psd))
+    if rc != 0 or not psacl:
+        return None
+    try:
+        # ACL: AclRevision(1) Sbz1(1) AclSize(2) AceCount(2) Sbz2(2)
+        buf = ctypes.string_at(psacl.value, 8)
+        ace_count = int.from_bytes(buf[4:6], "little")
+        offset = 8
+        for _ in range(ace_count):
+            hdr = ctypes.string_at(psacl.value + offset, 4)
+            ace_type = hdr[0]
+            ace_size = int.from_bytes(hdr[2:4], "little")
+            if ace_type == SYSTEM_MANDATORY_LABEL_ACE_TYPE:
+                # ACE: type(1) flags(1) size(2) mask(4) sid...
+                sid = psacl.value + offset + 8
+                sub_cnt = ctypes.string_at(sid + 1, 1)[0]
+                # SID: rev(1) count(1) auth(6) subauth[]
+                last = ctypes.string_at(sid + 8 + (sub_cnt - 1) * 4, 4)
+                return int.from_bytes(last, "little")
+            if ace_size <= 0:
+                break
+            offset += ace_size
+    finally:
+        ctypes.windll.kernel32.LocalFree(psd)
+    return None
+
+
+def install_icon():
+    """把图标复制到 %LOCALAPPDATA%，避开工作区目录树上的低完整性标签。"""
+    os.makedirs(ICON_DIR, exist_ok=True)
+    shutil.copy2(ICO_SRC, ICO)
+    rid = integrity_rid(ICO)
+    name = INTEGRITY_NAMES.get(rid, "RID=0x%04X" % rid if rid is not None else "无标签")
+    return rid, name
+
+
 def main():
     ensure_utf8_console()
 
@@ -302,12 +386,16 @@ def main():
 
     ok = True
     bat = os.path.join(HERE, BAT_NAME)
-    for label, path in (("启动脚本", bat), ("图标", ICO)):
-        exists = os.path.isfile(path)
-        print("  %-8s %s  %s" % (label, "存在" if exists else "缺失 <<<", path))
-        if not exists:
-            print("\nRESULT: FAILED（缺少必要文件）")
-            return 1
+    if not os.path.isfile(bat):
+        print("  启动脚本 缺失 <<< %s" % bat)
+        print("\nRESULT: FAILED（缺少启动脚本）")
+        return 1
+    print("  启动脚本 : %s" % bat)
+    if not os.path.isfile(ICO_SRC):
+        print("  图标源   缺失 <<< %s" % ICO_SRC)
+        print("\nRESULT: FAILED（缺少图标文件）")
+        return 1
+    print("  图标源   : %s" % ICO_SRC)
 
     desk = desktop_path()
     print("  桌面目录 : %s" % desk)
@@ -318,16 +406,29 @@ def main():
 
     lnk = os.path.join(desk, LNK_NAME)
 
-    # ---------------- 1. 创建 ----------------
-    print("\n[1/4] 创建 %s" % LNK_NAME)
+    # ---------------- 1. 安装图标 ----------------
+    print("\n[1/5] 安装图标到用户目录")
+    rid, name = install_icon()
+    src_name = INTEGRITY_NAMES.get(integrity_rid(ICO_SRC),
+                                   "RID=0x%04X" % integrity_rid(ICO_SRC)
+                                   if integrity_rid(ICO_SRC) is not None else "无标签")
+    print("      安装到   : %s" % ICO)
+    print("      源标签   : %s" % src_name)
+    print("      安装后   : %s" % name)
+    if rid is not None and rid <= 0x1000:
+        print("      警告 <<< 安装后的图标仍是低完整性标签，操作系统可能仍显示白纸")
+        ok = False
+
+    # ---------------- 2. 创建快捷方式 ----------------
+    print("\n[2/5] 创建 %s" % LNK_NAME)
     if not create_lnk(lnk, bat, ICO, HERE, DESC):
         print("      失败 <<<")
         print("\nRESULT: FAILED")
         return 1
     print("      ok  (%d 字节)" % os.path.getsize(lnk))
 
-    # ---------------- 2. 回读属性 ----------------
-    print("\n[2/4] 回读属性")
+    # ---------------- 3. 回读属性 ----------------
+    print("\n[3/5] 回读属性")
     data = read_lnk(lnk)
     for label, got, want in (("目标", data.get("target"), bat),
                              ("起始位置", data.get("workdir"), HERE)):
@@ -345,8 +446,8 @@ def main():
     else:
         print("      %-8s 有" % "备注")
 
-    # ---------------- 3. 系统实际图标像素 ----------------
-    print("\n[3/4] 取 Windows 实际分配给该快捷方式的图标像素")
+    # ---------------- 4. 系统实际图标像素 ----------------
+    print("\n[4/5] 取 Windows 实际分配给该快捷方式的图标像素")
     for small, tag in ((False, "大图标 32px"), (True, "小图标 16px")):
         simg, ssize, err = shell_icon_of(lnk, small=small)
         if simg is None:
@@ -366,8 +467,8 @@ def main():
               % (tag, simg.width, simg.height, mad,
                  "一致（系统确实用了我们的图标）" if same else "不一致 <<< 可能回退默认图标"))
 
-    # ---------------- 4. 断链检查 ----------------
-    print("\n[4/4] 断链检查")
+    # ---------------- 5. 断链检查 ----------------
+    print("\n[5/5] 断链检查")
     tgt = data.get("target") or ""
     live = os.path.isfile(tgt)
     ok &= live

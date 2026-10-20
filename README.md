@@ -94,7 +94,7 @@ Codex 0.163 给新一代模型（gpt-6-sol / gpt-6.1-sol / gpt-5.6 系列等）�
 | `assets/codex-tool-fix.png` | 1024px 预览图 |
 | `_make_icon.py` | 重新生成图标 |
 | `_check_icon.py` | 图标量化验收（居中 / 体量一致 / 对比度 / 小尺寸不糊） |
-| `_make_shortcut.py` | 创建桌面快捷方式并做像素级图标校验 |
+| `_make_shortcut.py` | 安装图标到 `%LOCALAPPDATA%`、创建桌面快捷方式并做像素级校验 |
 | `_verify_shortcut_e2e.py` | 端到端验证：快捷方式 → bat → 修复脚本 |
 | `_make_bat.py` | 重新生成启动器（改了中文提示后跑一下） |
 | `_make_broken_fixture.py` | 造一个"坏掉"的测试环境，用于回归测试 |
@@ -106,20 +106,32 @@ Codex 0.163 给新一代模型（gpt-6-sol / gpt-6.1-sol / gpt-5.6 系列等）�
 
 `.bat` 文件在资源管理器里只能显示系统默认图标，这是 Windows 的固定行为，改不了。
 想让它在桌面上是自定义图标，只能建一个 `.lnk` 快捷方式、把 `IconLocation`
-指向 `assets/codex-tool-fix.ico`。
+指向一个 `.ico`。
 
 ```
 python _make_shortcut.py
 ```
 
-它会在**真实桌面**（自动识别被重定向的桌面路径，例如 `D:\桌面文件`）创建
-`Codex 工具修复.lnk`，然后做四步验收：
+它会把图标**安装到 `%LOCALAPPDATA%\CodexToolFix\`**，再在**真实桌面**（自动识别被
+重定向的桌面路径，例如 `D:\桌面文件`）创建 `Codex 工具修复.lnk`，然后做五步验收：
 
-1. 回读 `.lnk` 的目标 / 起始位置 / 图标路径
-2. `SHGetFileInfoW` 取 Windows **实际分配**给该快捷方式的 `HICON`
-3. `GetIconInfo` + `GetDIBits` 取图标像素，与 `.ico` 里同尺寸那一帧逐像素比对
+1. 安装图标，并读取安装后文件的**完整性标签**
+2. 回读 `.lnk` 的目标 / 起始位置 / 图标路径
+3. `SHGetFileInfoW` 取 Windows **实际分配**给该快捷方式的 `HICON`
+4. `GetIconInfo` + `GetDIBits` 取图标像素，与 `.ico` 里同尺寸那一帧逐像素比对
    —— 只有这一步能证明系统真的用了我们的图标，而不是静默回退到默认图标
-4. 断链检查
+5. 断链检查
+
+### 为什么图标不能留在脚本目录里
+
+这是踩过的坑，值得写下来：如果**承载图标的目录**带低完整性标签（Low Mandatory
+Level），Windows shell 的图标提取管道会拒绝该文件，快捷方式就退化成一张**白纸**
+（通用文档图标），而 `.ico` 文件本身用任何常规手段检查都完全正常。
+
+判断方法：`icacls <目录>` 看是否带 `(OI)(CI)(IO)(NW)(RX)` 之类的低权标签，或者
+直接比较两个目录——把同一个 `.ico` 复制到 `%LOCALAPPDATA%` 能正常显示、留在脚本
+目录就变白纸，那就是它。`/setintegritylevel` 通常改不动（rc=5 拒绝访问），所以
+正确做法不是去改标签，而是**把图标装到用户目录**，即上面第 1 步。
 
 图标设计见 `_make_icon.py` 顶部注释：一枚 squircle 底片 + 加粗的命令行提示符 `❯`
 + 渐变光标块，避开被用滥的齿轮/扳手套话图形。16–32px 用一套单独加粗的参数重绘
@@ -134,6 +146,8 @@ python _make_shortcut.py
   `codex-catalog-classic.json` 和 CC-Switch 会投放的 `cc-switch-model-catalog.json`，
   两份内容完全相同）
 - 又出现"模型说没有工具"的症状
+- **移动了仓库目录**（图标装在 `%LOCALAPPDATA%` 是自包含的，不受影响；但如果之前
+  用的是老版本脚本、图标还指向仓库里，就需要重跑一次 `_make_shortcut.py`）
 
 ## 已知无关告警
 
