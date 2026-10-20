@@ -95,6 +95,7 @@ Codex 0.163 给新一代模型（gpt-6-sol / gpt-6.1-sol / gpt-5.6 系列等）�
 | `_make_icon.py` | 重新生成图标 |
 | `_check_icon.py` | 图标量化验收（居中 / 体量一致 / 对比度 / 小尺寸不糊） |
 | `_make_shortcut.py` | 安装图标到 `%LOCALAPPDATA%`、创建桌面快捷方式并做像素级校验 |
+| `_verify_icon_sizes.py` | 复核快捷方式在 10 个尺寸下是否真的显示我们的图标（抓白纸回退） |
 | `_verify_shortcut_e2e.py` | 端到端验证：快捷方式 → bat → 修复脚本 |
 | `_make_bat.py` | 重新生成启动器（改了中文提示后跑一下） |
 | `_make_broken_fixture.py` | 造一个"坏掉"的测试环境，用于回归测试 |
